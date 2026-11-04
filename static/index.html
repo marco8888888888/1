@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCRemote Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+  .btn { padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; transition: all 0.15s; cursor: pointer; border: none; }
+  .btn-blue { background: #3b82f6; color: #fff; }
+  .btn-blue:hover { background: #2563eb; }
+  .btn-red { background: #ef4444; color: #fff; }
+  .btn-red:hover { background: #dc2626; }
+  .btn-green { background: #22c55e; color: #fff; }
+  .btn-green:hover { background: #16a34a; }
+  .btn-yellow { background: #eab308; color: #000; }
+  .btn-yellow:hover { background: #ca8a04; }
+  .btn-purple { background: #a855f7; color: #fff; }
+  .btn-purple:hover { background: #9333ea; }
+  .btn-orange { background: #f97316; color: #fff; }
+  .btn-orange:hover { background: #ea580c; }
+  .btn-outline { background: transparent; border: 1px solid #475569; color: #94a3b8; }
+  .btn-outline:hover { border-color: #3b82f6; color: #3b82f6; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .online { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .offline { background: #64748b; }
+  #map { height: 300px; border-radius: 12px; }
+  .toast { position: fixed; bottom: 20px; right: 20px; z-index: 999; }
+  input, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; border-radius: 8px; padding: 8px 12px; }
+  input:focus, select:focus { outline: none; border-color: #3b82f6; }
+  .notif-item { border-left: 3px solid #3b82f6; }
+  .img-preview { max-width: 100%; border-radius: 8px; border: 1px solid #334155; }
+  .usage-bar { height: 24px; border-radius: 4px; background: #334155; overflow: hidden; }
+  .usage-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+</style>
+</head>
+<body class="min-h-screen p-4 md:p-6">
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+    <svg class="w-7 h-7 text-blue-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+    PCRemote
+  </h1>
+  <div id="connection-status" class="flex items-center gap-2 text-sm text-slate-400">
+    <span class="status-dot offline" id="ws-dot"></span> Verbinde...
+  </div>
+</div>
+
+<!-- No device -->
+<div id="no-device" class="card p-8 text-center text-slate-400">
+  <p class="text-lg mb-2">Kein Geraet verbunden</p>
+  <p class="text-sm">Starte die PCRemote-App auf dem Zielgeraet.</p>
+</div>
+
+<!-- Device panel -->
+<div id="device-panel" class="hidden space-y-4">
+
+  <!-- Status bar -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-3">
+        <span class="status-dot" id="dev-dot"></span>
+        <span id="dev-name" class="font-semibold text-white text-lg"></span>
+      </div>
+      <div class="flex items-center gap-4 text-sm text-slate-400 flex-wrap">
+        <span id="dev-battery" title="Akku">🔋 --</span>
+        <span id="dev-wifi" title="WLAN">📶 --</span>
+        <span id="dev-app" title="Aktive App">📱 --</span>
+        <span id="dev-screen" title="Display">🖥 --</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+    <button onclick="pauseNow(5)" class="btn btn-red">⏸ Pause 5 Min</button>
+    <button onclick="pauseNow(15)" class="btn btn-red">⏸ Pause 15 Min</button>
+    <button onclick="unlockDevice()" class="btn btn-green">🔓 Entsperren</button>
+    <button onclick="sendMessagePrompt()" class="btn btn-blue">💬 Nachricht</button>
+    <button onclick="ringDevice()" class="btn btn-orange">🔔 Klingeln</button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-1 overflow-x-auto pb-1">
+    <button onclick="showTab('controls')" class="tab-btn btn btn-outline" data-tab="controls" style="border-color:#3b82f6;color:#3b82f6">Steuerung</button>
+    <button onclick="showTab('apps')" class="tab-btn btn btn-outline" data-tab="apps">Apps</button>
+    <button onclick="showTab('location')" class="tab-btn btn btn-outline" data-tab="location">Standort</button>
+    <button onclick="showTab('notifications')" class="tab-btn btn btn-outline" data-tab="notifications">Benachrichtigungen</button>
+    <button onclick="showTab('usage')" class="tab-btn btn btn-outline" data-tab="usage">Nutzung</button>
+    <button onclick="showTab('media')" class="tab-btn btn btn-outline" data-tab="media">Screenshot/Foto</button>
+  </div>
+
+  <!-- Tab: Controls -->
+  <div id="tab-controls" class="tab-content space-y-4">
+    <div class="card p-4 space-y-3">
+      <h3 class="font-semibold text-white">⏰ Zeitlimits</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Tageslimit (Minuten)</label>
+          <div class="flex gap-2">
+            <input type="number" id="daily-limit" value="60" min="0" max="1440" class="flex-1">
+            <button onclick="setDailyLimit()" class="btn btn-blue text-xs">Setzen</button>
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">Ruhezeit</label>
+          <div class="flex gap-2 items-center">
+            <input type="time" id="quiet-start" value="20:00" class="flex-1">
+            <span class="text-slate-500">bis</span>
+            <input type="time" id="quiet-end" value="07:00" class="flex-1">
+            <button onclick="setQuietHours()" class="btn btn-blue text-xs">Setzen</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card p-4 space-y-3">
+      <h3 class="font-semibold text-white">🎁 Bonuszeit</h3>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="bonusTime(15)" class="btn btn-green">+15 Min</button>
+        <button onclick="bonusTime(30)" class="btn btn-green">+30 Min</button>
+        <button onclick="bonusTime(60)" class="btn btn-green">+60 Min</button>
+        <span id="bonus-display" class="flex items-center text-sm text-slate-400 ml-2">Bonus: 0 Min</span>
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-white">📚 Lernmodus</h3>
+          <p class="text-xs text-slate-400 mt-1">Sperrt alle Apps ausser Lern-Apps</p>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="learn-toggle" class="sr-only peer" onchange="toggleLearnMode()">
+          <div class="w-11 h-6 bg-slate-600 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+        </label>
+      </div>
+    </div>
+    <div class="card p-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-white">🌙 Nachtmodus (Graustufen)</h3>
+          <p class="text-xs text-slate-400 mt-1">Schaltet das Display auf Graustufen</p>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" id="night-toggle" class="sr-only peer" onchange="toggleNightMode()">
+          <div class="w-11 h-6 bg-slate-600 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Apps -->
+  <div id="tab-apps" class="tab-content hidden space-y-4">
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-white">📦 Installierte Apps</h3>
+        <button onclick="requestApps()" class="btn btn-outline text-xs">Aktualisieren</button>
+      </div>
+      <input type="text" id="app-search" placeholder="App suchen..." class="w-full mb-3" oninput="filterApps()">
+      <div id="app-list" class="space-y-2 max-h-96 overflow-y-auto">
+        <p class="text-slate-500 text-sm">Lade Apps...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Location -->
+  <div id="tab-location" class="tab-content hidden space-y-4">
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-white">📍 Standort</h3>
+        <button onclick="requestLocation()" class="btn btn-outline text-xs">Aktualisieren</button>
+      </div>
+      <div id="map"></div>
+      <p id="location-info" class="text-xs text-slate-400 mt-2">Noch kein Standort empfangen.</p>
+    </div>
+  </div>
+
+  <!-- Tab: Notifications -->
+  <div id="tab-notifications" class="tab-content hidden space-y-4">
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-white">🔔 Benachrichtigungen (Live)</h3>
+        <button onclick="clearNotifications()" class="btn btn-outline text-xs">Leeren</button>
+      </div>
+      <div id="notif-list" class="space-y-2 max-h-96 overflow-y-auto">
+        <p class="text-slate-500 text-sm">Warte auf Benachrichtigungen...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Usage -->
+  <div id="tab-usage" class="tab-content hidden space-y-4">
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-white">📊 App-Nutzung heute</h3>
+        <button onclick="requestUsageStats()" class="btn btn-outline text-xs">Aktualisieren</button>
+      </div>
+      <div id="usage-list" class="space-y-3">
+        <p class="text-slate-500 text-sm">Klicke "Aktualisieren" um Nutzungsdaten zu laden.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Screenshot/Photo -->
+  <div id="tab-media" class="tab-content hidden space-y-4">
+    <div class="card p-4">
+      <h3 class="font-semibold text-white mb-3">📸 Screenshot & Kamera</h3>
+      <div class="flex gap-3 flex-wrap mb-4">
+        <button onclick="requestScreenshot()" class="btn btn-purple">🖥 Screenshot</button>
+        <button onclick="requestPhoto('back')" class="btn btn-blue">📷 Foto (Rueck)</button>
+        <button onclick="requestPhoto('front')" class="btn btn-blue">🤳 Foto (Front)</button>
+      </div>
+      <div id="media-container" class="space-y-3">
+        <p id="media-placeholder" class="text-slate-500 text-sm">Noch kein Bild empfangen.</p>
+        <img id="media-img" class="img-preview hidden" alt="Empfangenes Bild">
+        <p id="media-info" class="text-xs text-slate-400 hidden"></p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden">
+  <div class="card px-4 py-3 flex items-center gap-2 text-sm border-green-500">
+    <span>✅</span> <span id="toast-text"></span>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let currentDevice = null;
+let allDevices = {};
+let allApps = [];
+let notifications = [];
+let map = null;
+let marker = null;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard`);
+  ws.onopen = () => {
+    document.getElementById('ws-dot').className = 'status-dot online';
+    document.getElementById('connection-status').innerHTML = '<span class="status-dot online" id="ws-dot"></span> Verbunden';
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-dot').className = 'status-dot offline';
+    document.getElementById('connection-status').innerHTML = '<span class="status-dot offline" id="ws-dot"></span> Getrennt';
+    setTimeout(connect, 3000);
+  };
+  ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+}
+
+function handleMessage(msg) {
+  if (msg.type === 'devices') {
+    allDevices = {};
+    msg.devices.forEach(d => allDevices[d.id] = d);
+    const ids = Object.keys(allDevices);
+    if (ids.length > 0) {
+      if (!currentDevice || !allDevices[currentDevice]) currentDevice = ids[0];
+      updateDeviceUI(allDevices[currentDevice]);
+      document.getElementById('no-device').classList.add('hidden');
+      document.getElementById('device-panel').classList.remove('hidden');
+    } else {
+      document.getElementById('no-device').classList.remove('hidden');
+      document.getElementById('device-panel').classList.add('hidden');
+    }
+  } else if (msg.type === 'device_status' && msg.device_id === currentDevice) {
+    Object.assign(allDevices[currentDevice], msg);
+    updateDeviceUI(allDevices[currentDevice]);
+  } else if (msg.type === 'apps' && msg.device_id === currentDevice) {
+    allApps = msg.apps || [];
+    renderApps();
+  } else if (msg.type === 'location' && msg.device_id === currentDevice) {
+    updateMap(msg.location);
+  } else if (msg.type === 'message_ack') {
+    showToast('Nachricht gelesen: ' + (msg.text || '').substring(0, 40));
+  } else if (msg.type === 'notification' && msg.device_id === currentDevice) {
+    addNotification(msg.notification);
+  } else if (msg.type === 'usage_stats' && msg.device_id === currentDevice) {
+    renderUsageStats(msg.stats);
+  } else if (msg.type === 'screenshot' && msg.device_id === currentDevice) {
+    showMedia(msg.data, 'Screenshot');
+  } else if (msg.type === 'photo' && msg.device_id === currentDevice) {
+    showMedia(msg.data, 'Foto');
+  }
+}
+
+function updateDeviceUI(d) {
+  document.getElementById('dev-name').textContent = d.name || d.id;
+  document.getElementById('dev-dot').className = 'status-dot ' + (d.online ? 'online' : 'offline');
+  const bat = d.battery >= 0 ? d.battery + '%' + (d.charging ? ' ⚡' : '') : '--';
+  document.getElementById('dev-battery').textContent = '🔋 ' + bat;
+  document.getElementById('dev-wifi').textContent = '📶 ' + (d.wifi || '--');
+  document.getElementById('dev-app').textContent = '📱 ' + (d.current_app ? d.current_app.split('.').pop() : '--');
+  document.getElementById('dev-screen').textContent = '🖥 ' + (d.screen_on ? 'An' : 'Aus');
+  if (d.rules) {
+    document.getElementById('daily-limit').value = d.rules.daily_limit_minutes || 60;
+    document.getElementById('quiet-start').value = d.rules.quiet_start || '20:00';
+    document.getElementById('quiet-end').value = d.rules.quiet_end || '07:00';
+    document.getElementById('bonus-display').textContent = 'Bonus: ' + (d.rules.bonus_minutes || 0) + ' Min';
+    document.getElementById('learn-toggle').checked = d.rules.learn_mode || false;
+    document.getElementById('night-toggle').checked = d.rules.night_mode || false;
+  }
+  if (d.installed_apps && d.installed_apps.length > 0 && allApps.length === 0) { allApps = d.installed_apps; renderApps(); }
+  if (d.location) updateMap(d.location);
+}
+
+// ── Commands ──
+function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({...msg, device_id: currentDevice})); }
+function pauseNow(min) { send({type: 'lock', minutes: min}); showToast('Geraet gesperrt fuer ' + min + ' Min'); }
+function unlockDevice() { send({type: 'unlock'}); showToast('Geraet entsperrt'); }
+function bonusTime(min) { send({type: 'bonus_time', minutes: min}); showToast('+' + min + ' Min Bonuszeit'); }
+function setDailyLimit() { send({type: 'set_daily_limit', minutes: parseInt(document.getElementById('daily-limit').value)}); showToast('Tageslimit gesetzt'); }
+function setQuietHours() { send({type: 'set_quiet_hours', start: document.getElementById('quiet-start').value, end: document.getElementById('quiet-end').value}); showToast('Ruhezeiten gesetzt'); }
+function toggleLearnMode() { send({type: 'set_learn_mode', enabled: document.getElementById('learn-toggle').checked}); }
+function toggleNightMode() { send({type: 'set_night_mode', enabled: document.getElementById('night-toggle').checked}); }
+function requestApps() { send({type: 'request_apps'}); }
+function requestLocation() { send({type: 'request_location'}); }
+function ringDevice() { send({type: 'ring_device'}); showToast('Handy klingelt!'); }
+function requestScreenshot() { send({type: 'request_screenshot'}); showToast('Screenshot angefordert...'); }
+function requestPhoto(cam) { send({type: 'request_photo', camera: cam}); showToast('Foto angefordert (' + cam + ')...'); }
+function requestUsageStats() { send({type: 'request_usage_stats'}); showToast('Nutzungsdaten angefordert...'); }
+
+function sendMessagePrompt() {
+  const text = prompt('Nachricht an das Geraet:');
+  if (text) { send({type: 'send_message', text: text}); showToast('Nachricht gesendet'); }
+}
+
+// ── Notifications ──
+function addNotification(n) {
+  notifications.unshift(n);
+  if (notifications.length > 50) notifications.pop();
+  renderNotifications();
+}
+function clearNotifications() { notifications = []; renderNotifications(); }
+function renderNotifications() {
+  const c = document.getElementById('notif-list');
+  if (notifications.length === 0) { c.innerHTML = '<p class="text-slate-500 text-sm">Keine Benachrichtigungen.</p>'; return; }
+  c.innerHTML = notifications.map(n => {
+    const t = n.ts ? new Date(n.ts * 1000).toLocaleTimeString('de') : '';
+    return '<div class="notif-item bg-slate-800/50 p-3 rounded-lg"><div class="flex justify-between items-start"><span class="text-xs text-blue-400 font-semibold">' + (n.app || '').split('.').pop() + '</span><span class="text-xs text-slate-500">' + t + '</span></div><p class="text-sm text-white mt-1">' + (n.title || '') + '</p><p class="text-xs text-slate-400">' + (n.text || '') + '</p></div>';
+  }).join('');
+}
+
+// ── Usage Stats ──
+function renderUsageStats(stats) {
+  const c = document.getElementById('usage-list');
+  if (!stats || stats.length === 0) { c.innerHTML = '<p class="text-slate-500 text-sm">Keine Nutzungsdaten verfuegbar.</p>'; return; }
+  const maxMin = Math.max(...stats.map(s => s.minutes || 0), 1);
+  const colors = ['#3b82f6','#22c55e','#eab308','#ef4444','#a855f7','#f97316','#06b6d4','#ec4899'];
+  c.innerHTML = stats.slice(0, 15).map((s, i) => {
+    const pct = ((s.minutes || 0) / maxMin * 100).toFixed(0);
+    const col = colors[i % colors.length];
+    const label = (s.label || s.package || '').split('.').pop();
+    return '<div><div class="flex justify-between text-xs mb-1"><span class="text-slate-300">' + label + '</span><span class="text-slate-400">' + (s.minutes || 0) + ' Min</span></div><div class="usage-bar"><div class="usage-fill" style="width:' + pct + '%;background:' + col + '"></div></div></div>';
+  }).join('');
+}
+
+// ── Media ──
+function showMedia(data, label) {
+  if (!data) return;
+  document.getElementById('media-placeholder').classList.add('hidden');
+  const img = document.getElementById('media-img');
+  img.src = 'data:image/jpeg;base64,' + data;
+  img.classList.remove('hidden');
+  const info = document.getElementById('media-info');
+  info.textContent = label + ' empfangen um ' + new Date().toLocaleTimeString('de');
+  info.classList.remove('hidden');
+}
+
+// ── Apps list ──
+function renderApps() {
+  const container = document.getElementById('app-list');
+  const search = document.getElementById('app-search').value.toLowerCase();
+  const dev = allDevices[currentDevice];
+  const rules = dev && dev.rules ? dev.rules.app_rules || {} : {};
+  const filtered = allApps.filter(function(a) {
+    const label = (a.label || a.package || '').toLowerCase();
+    return label.includes(search) || (a.package || '').toLowerCase().includes(search);
+  });
+  if (filtered.length === 0) { container.innerHTML = '<p class="text-slate-500 text-sm">Keine Apps gefunden.</p>'; return; }
+  container.innerHTML = filtered.map(function(a) {
+    const pkg = a.package || '';
+    const label = a.label || pkg.split('.').pop();
+    const rule = rules[pkg] || 'limited';
+    return '<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-slate-800/50"><span class="text-sm truncate flex-1 mr-3" title="' + pkg + '">' + label + '</span><div class="flex gap-1"><button onclick="setAppRule(\'' + pkg + '\',\'allowed\')" class="text-xs px-2 py-1 rounded ' + (rule==='allowed'?'bg-green-600 text-white':'bg-slate-700 text-slate-400') + '">✓</button><button onclick="setAppRule(\'' + pkg + '\',\'limited\')" class="text-xs px-2 py-1 rounded ' + (rule==='limited'?'bg-yellow-600 text-black':'bg-slate-700 text-slate-400') + '">⏱</button><button onclick="setAppRule(\'' + pkg + '\',\'blocked\')" class="text-xs px-2 py-1 rounded ' + (rule==='blocked'?'bg-red-600 text-white':'bg-slate-700 text-slate-400') + '">✕</button></div></div>';
+  }).join('');
+}
+function setAppRule(pkg, rule) {
+  send({type: 'set_app_rule', package: pkg, rule: rule});
+  var dev = allDevices[currentDevice];
+  if (dev && dev.rules) { dev.rules.app_rules[pkg] = rule; }
+  renderApps();
+}
+function filterApps() { renderApps(); }
+
+// ── Map ──
+function updateMap(loc) {
+  if (!loc) return;
+  document.getElementById('location-info').textContent = 'Lat: ' + loc.lat.toFixed(6) + ', Lng: ' + loc.lng.toFixed(6) + ' — ' + (loc.ts ? new Date(loc.ts * 1000).toLocaleTimeString('de') : '');
+  if (!map) {
+    map = L.map('map').setView([loc.lat, loc.lng], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OSM'}).addTo(map);
+    marker = L.marker([loc.lat, loc.lng]).addTo(map);
+  } else { map.setView([loc.lat, loc.lng], 15); marker.setLatLng([loc.lat, loc.lng]); }
+}
+
+// ── Tabs ──
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(function(el) { el.classList.add('hidden'); });
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    if (btn.dataset.tab === name) { btn.style.borderColor = '#3b82f6'; btn.style.color = '#3b82f6'; }
+    else { btn.style.borderColor = '#475569'; btn.style.color = '#94a3b8'; }
+  });
+  if (name === 'location' && map) setTimeout(function() { map.invalidateSize(); }, 100);
+}
+
+// ── Toast ──
+function showToast(text) {
+  var el = document.getElementById('toast');
+  document.getElementById('toast-text').textContent = text;
+  el.classList.remove('hidden');
+  setTimeout(function() { el.classList.add('hidden'); }, 3000);
+}
+
+connect();
+</script>
+</body>
+</html>
